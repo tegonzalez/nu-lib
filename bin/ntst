@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+SCRIPT="$(dirname "$0")/../tools/ntst/ntst.nu"
+nu "$SCRIPT" "$@"

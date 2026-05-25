@@ -1,0 +1,11 @@
+#!/usr/bin/env nu
+# fixture: immediate-child cases (depth 1 below "module/")
+use ../../../../lib/test.nu *
+def cases [] { [
+  {name: "module/alpha" iut: {|_| true} input: null expected: true runner: "value"}
+  {name: "module/beta"  iut: {|_| true} input: null expected: true runner: "value"}
+] }
+def main [--filter(-f): string = "", --tag(-t): string = "", --format: string = "text", --list(-l)] {
+  if $list { cases | list-cases | to json | print; return }
+  cases | run --filter $filter --tag $tag | report --format $format
+}
