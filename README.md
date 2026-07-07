@@ -1,12 +1,12 @@
 # Nu Script Library
 
-`nu-lib` is a Nushell toolkit for building repository-local command line tools. It supplies reusable modules for argument parsing, pattern matching, filesystem queries, Markdown/text processing, structured rendering, terminal display, locking, testing, and bounded parallel execution.
+`nu-lib` is a Nushell toolkit for building repository-local command line tools. It supplies reusable modules for argument parsing, pattern matching, filesystem queries, path identity resolution, Markdown/text processing, structured rendering, terminal display, locking, testing, and bounded parallel execution.
 
 The library is meant for scripts that need shell ergonomics without losing structured data. Tools exchange records, tables, lists, and strings; modules return structured values where possible; command entry points own user-facing IO.
 
 ## Purpose
 
-Use `nu-lib` when a repo tool needs to parse command chains and global flags, filter paths or names with a compact pattern syntax, turn Markdown/filesystem/tree data into structured records, render output as terminal tables or JSON, run Nu tests, coordinate subprocess work, or keep terminal and file effects isolated behind explicit module boundaries.
+Use `nu-lib` when a repo tool needs to parse command chains and global flags, filter paths or names with a compact pattern syntax, resolve paths for logical display and real identity checks, turn Markdown/filesystem/tree data into structured records, render output as terminal tables or JSON, run Nu tests, coordinate subprocess work, or keep terminal and file effects isolated behind explicit module boundaries.
 
 The top-level contract is **isolate IO**: pure transforms accept data via `$in` or explicit arguments and return data; query modules isolate reads; mutating modules are marked; command entry points own `open`, `save`, `print`, and process exit behavior.
 
@@ -36,7 +36,7 @@ This README explains the library organization, bundled generic tools, and shared
 | Tier        | Description                                                        | Examples                                       |
 | ----------- | ------------------------------------------------------------------ | ---------------------------------------------- |
 | Pure        | No filesystem, terminal, subprocess, or process-exit effects.      | `pat`, `args`, `md`, `mermaid`, `rstr`, `rope` |
-| Query IO    | Reads files, directories, or subprocess output without mutation.    | `fs glob-files`, `fs find`, `fs grep`          |
+| Query IO    | Reads files, directories, or subprocess output without mutation.    | `fs glob-files`, `fs find`, `fs grep`, `path.nu` |
 | Mutating IO | Writes files or changes durable state; marked in the module source. | `fs edit-lines`, `fs edit-section`             |
 | Terminal IO | Owns ANSI, cursor movement, stdout panels, or stderr diagnostics.   | `render`, `stream`, `tui`, `log`               |
 
@@ -49,6 +49,7 @@ Command scripts are allowed to combine tiers. Library modules should keep effect
 | `args.nu`    | Command argument normalization | A tool needs global flags, subcommands, command chains, or help text.  |
 | `pat.nu`     | Two-channel pattern matching   | A command needs one compact argument for scope and expression filters. |
 | `fs.nu`      | Filesystem query and edits     | A tool needs structured glob/find/grep results or bounded text edits.  |
+| `path.nu`    | Resolved path identity         | A tool needs logical display paths plus real filesystem identity.      |
 | `md.nu`      | Markdown extraction            | A script needs headings, frontmatter, sections, code blocks, or links. |
 | `mermaid.nu` | Mermaid diagram serialization  | A script needs to build diagram text from structured records.          |
 | `rstr.nu`    | Region-marked strings          | Output needs style tags while remaining render-format independent.     |
@@ -159,7 +160,7 @@ ntst -f json
 ntst lf
 ```
 
-The runner uses `pool.nu` for bounded parallelism, `stream.nu` for live progress, and `test.nu` for case execution inside each test file.
+The runner uses `pool.nu` for bounded parallelism, `stream.nu` for live progress, and `test.nu` for case execution inside each test file. Scoped discovery uses `path.nu` to preserve logical cwd and symlink display while using real path identity for comparison and containment.
 
 ### `cg`
 
@@ -174,6 +175,32 @@ cg path/to/src -f json
 Use `tools/cg/README.md` for namespace rules, filter forms, output shape, and current limitations.
 
 ## Module Reference
+
+### `path.nu` — Resolved Path Identity
+
+**Import:** `use ./lib/path.nu *`
+
+Query IO — resolves filesystem paths for identity and display. It does not print, save, or mutate.
+
+`path.nu` returns both caller-facing logical paths and strict real filesystem identities. Use the logical fields for display and the identity fields for equality or containment checks. Rooted inputs, including `/...` and `~...`, are expanded directly before any base join; relative inputs are joined to the supplied base or current working directory.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `resolve-path` | `raw: string --base?: any` | Return `{raw, logical_abs, lexical_abs, real_abs, identity}` for one path |
+| `same-path` | `left: record, right: record` | True when both resolved paths have the same strict identity |
+| `contains-path` | `base: record, target: record` | True when target identity is contained under base identity |
+| `relative-display` | `target: record, base: record` | Prefer a logical relative path; fall back to real containment when symlinks differ |
+
+**Usage:**
+```nu
+use ./lib/path.nu *
+
+let base = resolve-path (pwd)
+let target = resolve-path "~/repo/nu-lib/lib/tests" --base $base
+relative-display $target $base
+```
+
+---
 
 ### `pat.nu` — Pattern-Spec Parser
 
@@ -1103,6 +1130,7 @@ Unit tests for library modules live in `lib/tests/`.
 | File                     | Covers                                                                    |
 | ------------------------ | ------------------------------------------------------------------------- |
 | `lib/tests/test_args.nu` | `global-dto`, `split-chain`, `parse-segment`, `parse-chain` -- 23 cases. |
+| `lib/tests/test_path.nu` | Logical and real path identity, tilde-rooted resolution, containment, and relative display. |
 
 Run via the test runner:
 ```sh

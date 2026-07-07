@@ -18,6 +18,7 @@ use ../../lib/pat.nu *
 use ../../lib/rstr.nu *
 use ../../lib/pool.nu *
 use ../../lib/rope.nu *
+use ../../lib/path.nu *
 
 # ── Runner CLI spec (private — A-005: app-specific config lives in the app) ──
 
@@ -80,14 +81,16 @@ def is-test-file [entry: record] {
 
 # Discover test files under a literal filesystem scope. File scopes select that
 # file only; directory scopes recurse below the directory.
-def discover [scope: string] {
-  let root_abs = ($scope | path expand)
-  let root_entry = try { ls --directory $root_abs | first } catch {|e|
+def discover-with-base [scope: string, invocation_base: record] {
+  let root_path = (resolve-path $scope --base $invocation_base)
+  let root_type = if $root_path.identity == null { null } else { $root_path.identity | path type }
+  if $root_type == null {
     error make {msg: $"ntst: scope not found: ($scope)"}
   }
+  let root_entry = {name: $root_path.logical_abs, type: $root_type}
 
   if $root_entry.type == "file" {
-    if (is-test-file $root_entry) { return [($root_entry.name | path expand)] }
+    if (is-test-file $root_entry) { return [$root_path.logical_abs] }
     return []
   }
 
@@ -100,7 +103,7 @@ def discover [scope: string] {
     mut next_frontier = []
     for rec in $frontier {
       if (is-test-file $rec) {
-        $found = ($found | append ($rec.name | path expand))
+        $found = ($found | append (resolve-path $rec.name --base $invocation_base).logical_abs)
       } else if $rec.type == "dir" {
         let children = try { ls $rec.name | sort-by type name } catch { [] }
         $next_frontier = ($next_frontier ++ $children)
@@ -111,13 +114,17 @@ def discover [scope: string] {
   $found | sort
 }
 
+def discover [scope: string] {
+  discover-with-base $scope (resolve-path (pwd))
+}
+
 # ── run ──────────────────────────────────────────────────────────────────────
 
 # Parse complete output from one test file into a list of event records.
 # Skips non-JSON lines and applies the pattern filter.
 # Returns list<record> where each record has _channel/fn/result/name/file/line/duration_ms/message/expected/actual.
-def parse-file-output [f: string, out: record, expr_pat: record] {
-  let rel     = ($f | path relative-to (pwd))
+def parse-file-output [f: string, out: record, expr_pat: record, invocation_base: record] {
+  let rel     = (relative-display (resolve-path $f --base $invocation_base) $invocation_base)
   let fn_name = (file-to-stem $f)
   if $out.exit_code != 0 and ($out.stdout | str trim | is-empty) {
     return [{
@@ -266,6 +273,7 @@ def run-step [cfg: record, acc: record, r: record] {
 
 # Run impl: accepts parsed DTO + global config, executes test discovery and streaming run.
 def run-impl [dto: record, global: record] {
+  let invocation_base = (resolve-path (pwd))
   let query    = ntst-split $dto.args.pat
   let run_cfg  = {delim: "/", expr_delim: null, anchors: [], anchor_descend: false}
   let expr_pat = ntst-expr $query.expr $run_cfg
@@ -273,7 +281,7 @@ def run-impl [dto: record, global: record] {
   let run_cols = if $global.verbose { ["fn" "name" "result" "file" "message" "duration_ms"] } else { ["fn" "name" "result"] }
   let render_cfg = {output: {format: $global.format, cols: $run_cols, tail: 8}}
   let cfg = {render: $render_cfg, debug: $global.debug}
-  let files    = (discover $query.scope)
+  let files    = (discover-with-base $query.scope $invocation_base)
   let tag_args = if ($tag | is-not-empty) { ["--tag" $tag] } else { [] }
 
   let render_channels = [{name: "results", kind: "tail", height: 12}, {name: "progress", kind: "label"}, {name: "summary", kind: "label"}]
@@ -288,7 +296,7 @@ def run-impl [dto: record, global: record] {
   # re-interrupted. Wrapping each stage individually ensures TUI cleanup runs
   # even when the interrupt flag fires mid-way through cleanup.
   let acc = try {
-    pool-run $files $tag_args {|acc ev| run-step $cfg $acc $ev} --jobs ($global | get jobs? | default "0" | into int) --init ($init_acc | upsert last_start null) --parse {|f out| parse-file-output $f $out $expr_pat}
+    pool-run $files $tag_args {|acc ev| run-step $cfg $acc $ev} --jobs ($global | get jobs? | default "0" | into int) --init ($init_acc | upsert last_start null) --parse {|f out| parse-file-output $f $out $expr_pat $invocation_base}
   } catch {|_|
     $init_acc | upsert _interrupted true
   }
@@ -316,14 +324,15 @@ def file-to-stem [path: string] {
 # cfg: delim="/" for fs-shaped scope; expr_delim="/" so case names like "module/alpha"
 # are matched depth-aware (% = one segment, %% = any depth).
 def lf-impl [dto: record, global: record] {
+  let invocation_base = (resolve-path (pwd))
   let query = ntst-split $dto.args.pat
   let lf_cfg  = {delim: "/", expr_delim: "/", anchors: [], anchor_descend: false}
   let expr_pat = ntst-expr $query.expr $lf_cfg
 
-  let files   = (discover $query.scope)
+  let files   = (discover-with-base $query.scope $invocation_base)
 
   # Group files by their relative directory
-  let groups = $files | group-by {|f| $f | path dirname | path relative-to (pwd)}
+  let groups = $files | group-by {|f| relative-display (resolve-path ($f | path dirname) --base $invocation_base) $invocation_base}
 
   let tree = $groups | transpose dir file_list | each {|g|
     let rows = $g.file_list | each {|f|

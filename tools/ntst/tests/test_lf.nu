@@ -13,6 +13,47 @@ def ntst-lf [...args: string] {
     ^bash -c $cmd
 }
 
+def ntst-lf-complete-from-cwd [cwd: string, ...args: string] {
+    let ntst_bin = ($repo_root | path join "nu-lib" "bin" "ntst")
+    let arg_str = ($args | each {|a| $"'($a)'"} | str join " ")
+    let cmd = $"cd '($cwd)' && '($ntst_bin)' lf --format text ($arg_str)"
+    do { ^bash -c $cmd } | complete
+}
+
+def ntst-lf-complete-with-home [home: string, ...args: string] {
+    let arg_str = ($args | each {|a| $"'($a)'"} | str join " ")
+    let cmd = $"cd ($repo_root) && HOME='($home)' nu ($ntst_nu) lf --format text ($arg_str)"
+    do { ^bash -c $cmd } | complete
+}
+
+def with-repo-symlink [body: closure] {
+    let link = ("/tmp" | path join $"ntst-repo-link-(random uuid)")
+    ^ln -s $repo_root $link
+    let result = try {
+        do $body $link
+    } catch {|e|
+        try { rm -f $link } catch {|_| }
+        error make {msg: $e.msg}
+    }
+    try { rm -f $link } catch {|_| }
+    $result
+}
+
+def with-home-repo-symlink [body: closure] {
+    let home = ("/tmp" | path join $"ntst-home-(random uuid)")
+    let link = ($home | path join "repo")
+    mkdir $home
+    ^ln -s $repo_root $link
+    let result = try {
+        do $body $home
+    } catch {|e|
+        try { rm -rf $home } catch {|_| }
+        error make {msg: $e.msg}
+    }
+    try { rm -rf $home } catch {|_| }
+    $result
+}
+
 # Run `ntst run [args...]` from the repo root and return the completed process.
 def ntst-run-complete [...args: string] {
     let arg_str = ($args | each {|a| $"'($a)'"} | str join " ")
@@ -110,6 +151,47 @@ def cases [] { [
      input:    null
      expected: true
      runner:   "value"}
+
+    # ntst-lf-05: a symlink/logical cwd can list a user-scoped folder without
+    # failing raw lexical relative-to checks against the physical repo path.
+    {name: "ntst-lf-05-logical-cwd-scope-display"
+     iut: {|_|
+         with-repo-symlink {|cwd|
+             let scoped = (ntst-lf-complete-from-cwd $cwd "nu-lib/tools/ntst/tests:ntst-lf%")
+             let bare = (ntst-lf-complete-from-cwd $cwd)
+             [
+                 ($scoped.exit_code == 0)
+                 ($scoped.stderr | str trim | is-empty)
+                 ($scoped.stdout | str contains "nu-lib/tools/ntst/tests")
+                 (not ($scoped.stdout | str contains $repo_root))
+                 ($bare.exit_code == 0)
+                 ($bare.stderr | str trim | is-empty)
+                 ($bare.stdout | str contains "nu-lib/tools/ntst/tests")
+                 ($bare.stdout | str contains "nu-lib/lib/tests")
+                 (not ($bare.stdout | str contains $repo_root))
+             ] | all {|ok| $ok}
+         }
+     }
+     input: null
+     expected: true
+     runner: "value"}
+
+    {name: "ntst-lf-06-tilde-scope-expands-before-base-join"
+     iut: {|_|
+         with-home-repo-symlink {|home|
+             let scoped = (ntst-lf-complete-with-home $home "~/repo/nu-lib/tools/ntst/tests:ntst-lf%")
+             [
+                 ($scoped.exit_code == 0)
+                 ($scoped.stderr | str trim | is-empty)
+                 ($scoped.stdout | str contains "nu-lib/tools/ntst/tests")
+                 (not ($scoped.stderr | str contains "scope not found"))
+                 (not ($scoped.stderr | str contains "/~/"))
+             ] | all {|ok| $ok}
+         }
+     }
+     input: null
+     expected: true
+     runner: "value"}
 
     # ntst-executes: ntst run on a real test file (test_pat_v2_surface.nu, filtered to a few cases) produces
     # result records with pass/fail fields — avoids recursive invocation of this file.
